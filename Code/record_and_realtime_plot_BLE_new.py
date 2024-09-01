@@ -6,6 +6,7 @@ import threading
 import digitalfilter
 import sys
 import signal
+import numpy as np
 
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
@@ -21,8 +22,13 @@ inamp_gain = 50
 sample_rate = 256
 filters = digitalfilter.get_Biopotential_filter(order=4, cutoff=[1, 30], btype="bandpass", fs=256, output="sos")
 enable_filters = True
-write_to_file = True
+write_to_file = False
 autoscale = False
+
+# Set fixed axis limits
+time_domain_ylim = (-min_buffer_uV, min_buffer_uV)  # Fixed y-axis limits for time-domain plot
+freq_domain_xlim = (0, sample_rate / 2)  # Fixed x-axis limits for frequency-domain plot
+freq_domain_ylim = (0, 1e7)  # Set this according to the expected power range
 
 current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
 filename = f"OpenEarableEEG_BLE_{current_time}.csv"
@@ -31,38 +37,52 @@ if write_to_file:
     recording_file = open("./recordings/" + filename, 'w')
     recording_file.write("time,raw_data,filtered_data\n")
 
-fig, ax = plt.subplots()
-line, = ax.plot([], [])
+fig, (ax_time, ax_freq) = plt.subplots(2, 1)
+line_time, = ax_time.plot([], [])
+line_freq, = ax_freq.plot([], [])
 
 exit_event = threading.Event()
 
 last_valid_timestamp = None
 
 def init():
-    line.set_data([], [])
-    ax.set_xlim(0, max_datapoints_to_display)
-    ax.set_title("Biopontential Data from OpenEarable EEG")
-    ax.set_ylabel("Voltage (µV)")
-    ax.set_xlabel("Samples")
-    return line,
+    line_time.set_data([], [])
+    ax_time.set_xlim(0, max_datapoints_to_display)
+    ax_time.set_ylim(time_domain_ylim)  # Apply fixed y-axis limits for the time-domain plot
+    ax_time.set_title("Biopontential Data from OpenEarable EEG")
+    ax_time.set_ylabel("Voltage (µV)")
+    ax_time.set_xlabel("Samples")
+
+    line_freq.set_data([], [])
+    ax_freq.set_xlim(freq_domain_xlim)  # Apply fixed x-axis limits for the frequency-domain plot
+    ax_freq.set_ylim(freq_domain_ylim)  # Apply fixed y-axis limits for the frequency-domain plot
+    ax_freq.set_title("Frequency Spectrum")
+    ax_freq.set_ylabel("Power")
+    ax_freq.set_xlabel("Frequency (Hz)")
+
+    return line_time, line_freq
 
 def animate(frame):
     global dataList
 
-    # DataList is updated in the notification handler
+    # Update the time-domain plot
     dataList = dataList[-max_datapoints_to_display:]  # Keep only the latest data points
-    line.set_data(range(1, len(dataList) + 1), dataList)
+    line_time.set_data(range(1, len(dataList) + 1), dataList)
 
-    if dataList:
-        min_val = min(dataList)
-        max_val = max(dataList)
-        buffer = 0.1 * (max_val - min_val) if max_val - min_val > min_buffer_uV else min_buffer_uV
-        if autoscale:
-            ax.set_ylim(min_val - buffer, max_val + buffer)
-        else:
-            ax.set_ylim(-min_buffer_uV, min_buffer_uV)
-    
-    return line,
+    # Update the frequency-domain plot
+    if len(dataList) > 1:
+        freqs, power_spectrum = calculate_fft(dataList)
+        line_freq.set_data(freqs, power_spectrum)
+
+    return line_time, line_freq
+
+def calculate_fft(data):
+    # Calculate the FFT of the time-domain data
+    n = len(data)
+    fft_result = np.fft.rfft(data)
+    freqs = np.fft.rfftfreq(n, d=1/sample_rate)
+    power_spectrum = np.abs(fft_result)**2
+    return freqs, power_spectrum
 
 def notification_handler(sender, data):
     global dataList
