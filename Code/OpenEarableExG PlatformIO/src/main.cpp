@@ -6,41 +6,42 @@
 #include "ArduinoBLE.h"
 
 BLEService adcService("0029d054-23d0-4c58-a199-c6bdc16c4975");
-// Arduino max MTU is 23 bytes, so 5 32 bit floats == 20 bytes is the maximum number of samples that can be sent in one BLE packet
+// Updated: BLE characteristic can hold 20 bytes (4 for timestamp + 16 for floats)
 BLECharacteristic adcCharacteristic("20a4a273-c214-4c18-b433-329f30ef7275", BLERead | BLENotify, 20);
 
 Ad7124 adc(EPIN_SPI_CS, 8000000); // max sample rate: ~12100 SPS (when nothing printed on Serial, ~7080 when writing to Serial with 32 bit float)
 
-float data[5] = {0.0};
+float data[4] = {0.0}; // Reduced to 4 floats
 int i = 0;
 
+// Updated: Struct for BLE payload (includes timestamp and 4 floats)
+struct BLEPayload {
+  uint32_t timestamp;  // 4 bytes
+  float readings[4];   // 16 bytes (4 floats)
+};
 
-// When OpenEarable firmware is running as well, observed sample rate is not perfectly matched
-// samples per second: 614400/(32*x) where x is the value of samplesPerSecondVal
-//const uint16_t samplesPerSecondVal = 1; // 1 == 19200 SPS
-//const uint16_t samplesPerSecondVal = 60; // 60 == 320 SPS
-//const uint16_t samplesPerSecondVal = 160; // 160 == 120 SPS
-//const uint16_t samplesPerSecondVal = 38; // 38 == 505 SPS
-//const uint16_t samplesPerSecondVal = 19; // 19 == 1010 SPS
+BLEPayload payload;
+
+// Sampling rate configuration
 const uint16_t samplesPerSecondVal = 75; // 75 == 256 SPS
-//const uint16_t samplesPerSecondVal = 384; // 384 == 50 SPS
-//const uint16_t samplesPerSecondVal = 320; // 320 == 60 SPS
-//const uint16_t samplesPerSecondVal = 2047; // 2047 == 9.38 SPS // max value: 2047
 
 void updateBLE(float reading) {
-  data[i] = reading; 
-  if (i == 4) {
-    adcCharacteristic.writeValue((byte*)&data, sizeof(data));
-    memset(data, 0, sizeof(data));
+  data[i] = reading;
+  if (i == 3) { 
+    payload.timestamp = millis(); // Include timestamp in the payload
+    memcpy(payload.readings, data, sizeof(data)); 
+
+    // Write payload to BLE characteristic
+    adcCharacteristic.writeValue((byte*)&payload, sizeof(payload));
+    memset(data, 0, sizeof(data)); // Clear data buffer
     i = 0;
-  }
-  else {
+  } else {
     i++;
   }
 }
 
 void readExternalADC() {
-  float reading = (float) adc.readVolts(0);
+  float reading = (float)adc.readVolts(0);
   Serial.write((byte*)&reading, 4);
   Serial.write('\n');
   updateBLE(reading);
@@ -77,7 +78,7 @@ void setup() {
   BLE.setAdvertisedService(adcService);
   adcService.addCharacteristic(adcCharacteristic);
   BLE.addService(adcService);
-  adcCharacteristic.writeValue((byte*)&data, sizeof(data));
+  adcCharacteristic.writeValue((byte*)&payload, sizeof(payload)); // Initialize BLE characteristic
   BLE.advertise();
 }
 
